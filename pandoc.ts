@@ -65,6 +65,7 @@ export interface PandocInput {
     pandoc?: string, // optional path to Pandoc if it's not in the current PATH variable
     pdflatex?: string, // ditto for pdflatex
     directory: AbsoluteFilePath, // The working directory (where the original source file is)
+    documentArgs?: string[], // Per-document CLI arguments from YAML frontmatter
 }
 
 export interface PandocOutput {
@@ -93,6 +94,38 @@ export function needsUnicodeStripped(output: PandocOutput): boolean {
     return output.format === 'latex'
         || output.format === 'pdf'
         || output.format === 'beamer';
+}
+
+// Parse command line argument string respecting quoted values
+// Handles: --css="my file.css" --template="path with spaces" --flag
+function parseArgumentString(argString: string): string[] {
+    const args: string[] = [];
+    // Match either non-whitespace/non-quote sequences, or quoted strings
+    const regex = /(?:[^\s"']+|"[^"]*"|'[^']*')+/g;
+    let match;
+    
+    while ((match = regex.exec(argString)) !== null) {
+        let arg = match[0];
+        
+        // Handle arguments like --flag="quoted value"
+        if (arg.includes('=')) {
+            const [flagPart, ...valueParts] = arg.split('=');
+            let value = valueParts.join('='); // Rejoin in case value contains =
+            
+            // Remove quotes from value if present
+            if ((value.startsWith('"') && value.endsWith('"')) || 
+                (value.startsWith("'") && value.endsWith("'"))) {
+                value = value.slice(1, -1);
+            }
+            
+            args.push(`${flagPart}=${value}`);
+        } else {
+            // Simple flag without value
+            args.push(arg);
+        }
+    }
+    
+    return args;
 }
 
 // Note: extraParams is a list of strings like ['-o', 'file.md']
@@ -128,19 +161,36 @@ export const pandoc = async (input: PandocInput, output: PandocOutput, extraPara
         args.push('-o');
         args.push('-');
     }
-    // // Support Unicode in the PDF output if XeLaTeX is installed
-    if (output.format === 'pdf' && await lookpath('xelatex'))
-        args.push('--pdf-engine=xelatex');
+    // Support Unicode in the PDF output - prefer LuaLaTeX (modern) over XeLaTeX (legacy)
+    // Only add default pdf-engine if user hasn't specified one in extraParams or documentArgs
+    if (output.format === 'pdf') {
+        const hasUserPdfEngine = (extraParams?.some(param => param.includes('--pdf-engine')) || false) ||
+                                 (input.documentArgs?.some(arg => arg.includes('--pdf-engine')) || false);
+        if (!hasUserPdfEngine) {
+            // Prefer LuaLaTeX (modern, actively maintained) over XeLaTeX (legacy)
+            if (await lookpath('lualatex')) {
+                args.push('--pdf-engine=lualatex');
+            } else if (await lookpath('xelatex')) {
+                args.push('--pdf-engine=xelatex');
+            }
+            // If neither is available, Pandoc will fall back to pdflatex
+        }
+    }
     if (!stdin) {
         args.push(input.file);
     }
     // The metadata title is needed for ePub and standalone HTML formats
     // We use a metadata file to avoid being vulnerable to command injection
     if (input.metadataFile) args.push('--metadata-file', input.metadataFile);
-    // Extra parameters
+    // Per-document CLI arguments from YAML frontmatter
+    if (input.documentArgs) {
+        args.push(...input.documentArgs);
+    }
+    // Extra parameters (global settings)
     if (extraParams) {
-        extraParams = extraParams.flatMap(x => x.split(' ')).filter(x => x.length);
-        args.push(...extraParams);
+        // Fix: properly parse arguments respecting quoted values instead of naive split
+        const parsedArgs = extraParams.flatMap(x => parseArgumentString(x)).filter(x => x.length);
+        args.push(...parsedArgs);
     }
 
     function start () {

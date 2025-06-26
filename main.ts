@@ -18,17 +18,19 @@ import * as temp from 'temp';
 
 import render from './renderer';
 import PandocPluginSettingTab from './settings';
-import { PandocPluginSettings, DEFAULT_SETTINGS, replaceFileExtension } from './global';
+import { PandocPluginSettings, DEFAULT_SETTINGS, replaceFileExtension, fileExists } from './global';
 export default class PandocPlugin extends Plugin {
     settings!: PandocPluginSettings;
     features: { [key: string]: string | undefined } = {};
+    private binaryMapInitialized = false;
+    private everFoundPandoc = false;
 
     override async onload() {
         console.log('Loading Pandoc plugin');
         await this.loadSettings();
 
         // Check if Pandoc, LaTeX, etc. are installed and in the PATH
-        this.createBinaryMap();
+        await this.createBinaryMap();
 
         // Register all of the command palette entries
         this.registerCommands();
@@ -75,24 +77,92 @@ export default class PandocPlugin extends Plugin {
     }
 
     currentFileCanBeExported(format: OutputFormat): boolean {
-        // Is it an available output type?
-        if (needsPandoc(format) && !this.features['pandoc']) return false;
-        if (needsLaTeX(format) && !this.features['pdflatex']) return false;
         // Is it a supported input type?
         const file = this.getCurrentFile();
-        if (!file) return false;
-        for (const ext of inputExtensions) {
-            if (file.endsWith(ext)) return true;
+        if (!file) {
+            console.log('No current file for export check');
+            return false;
         }
-        return false;
+        
+        let validInput = false;
+        for (const ext of inputExtensions) {
+            if (file.endsWith(ext)) {
+                validInput = true;
+                break;
+            }
+        }
+        
+        if (!validInput) {
+            console.log('File type not supported for export:', file);
+            return false;
+        }
+        
+        // Aggressive debug logging
+        console.log('Export availability check:', {
+            format,
+            file: file.substring(file.lastIndexOf('/') + 1), // Just filename for brevity
+            binaryMapInitialized: this.binaryMapInitialized,
+            pandocPath: this.features['pandoc'],
+            everFoundPandoc: this.everFoundPandoc,
+            needsPandoc: needsPandoc(format),
+            needsLaTeX: needsLaTeX(format),
+            result: this.binaryMapInitialized ? 
+                (needsPandoc(format) ? (this.features['pandoc'] || this.everFoundPandoc) : true) : 
+                true
+        });
+        
+        // ALWAYS show commands if we haven't initialized binary map yet
+        if (!this.binaryMapInitialized) {
+            console.log('Binary map not initialized, showing command');
+            return true;
+        }
+        
+        // ALWAYS show commands if we've ever found Pandoc (even if features got cleared)
+        if (needsPandoc(format) && this.everFoundPandoc) {
+            console.log('Ever found Pandoc, showing command');
+            return true;
+        }
+        
+        // Check current binary availability
+        if (needsPandoc(format) && !this.features['pandoc']) {
+            console.log('Needs Pandoc but not found, hiding command');
+            return false;
+        }
+        
+        if (needsLaTeX(format) && !this.features['pdflatex']) {
+            console.log('Needs LaTeX but not found, hiding command');
+            return false;
+        }
+        
+        console.log('All checks passed, showing command');
+        return true;
     }
 
     async createBinaryMap() {
         this.features['pandoc'] = this.settings.pandoc || await lookpath('pandoc');
         this.features['pdflatex'] = this.settings.pdflatex || await lookpath('pdflatex');
+        this.binaryMapInitialized = true;
+        
+        // Remember if we ever found Pandoc
+        if (this.features['pandoc']) {
+            this.everFoundPandoc = true;
+        }
+        
+        // Debug logging
+        console.log('Pandoc binary map initialized:', {
+            pandoc: this.features['pandoc'],
+            pdflatex: this.features['pdflatex'],
+            everFoundPandoc: this.everFoundPandoc
+        });
     }
 
     async startPandocExport(inputFile: string, format: OutputFormat, extension: string, shortName: string) {
+        console.log('Starting export - binary state before:', {
+            pandoc: this.features['pandoc'],
+            everFoundPandoc: this.everFoundPandoc,
+            binaryMapInitialized: this.binaryMapInitialized
+        });
+        
         new Notice(`Exporting ${inputFile} to ${shortName}`);
 
         // Instead of using Pandoc to process the raw Markdown, we use Obsidian's
@@ -115,7 +185,7 @@ export default class PandocPlugin extends Plugin {
                         new Notice('No active markdown view found');
                         return;
                     }
-                    const { html, metadata } = await render(this, view, inputFile, format);
+                    const { html, metadata, cliArgs } = await render(this, view, inputFile, format);
 
                     if (format === 'html') {
                         // Write to HTML file
@@ -139,6 +209,7 @@ export default class PandocPlugin extends Plugin {
                                 file: 'STDIN', contents: html, format: 'html', metadataFile,
                                 pandoc: this.settings.pandoc || undefined, pdflatex: this.settings.pdflatex || undefined,
                                 directory: path.dirname(inputFile),
+                                documentArgs: cliArgs,
                             },
                             { file: outputFile, format },
                             this.settings.extraArguments.split('\n')
@@ -149,11 +220,19 @@ export default class PandocPlugin extends Plugin {
                     break;
                 }
                 case 'md': {
+                    // For markdown export, we still need to extract YAML for CLI args
+                    const markdownContent = view ? view.data : await fs.promises.readFile(inputFile, 'utf8');
+                    const rawMetadata = this.getYAMLMetadata(markdownContent);
+                    const currentFileDir = path.dirname(inputFile);
+                    const vaultBasePath = this.vaultBasePath();
+                    const { cliArgs } = await this.convertYamlToPandocArgs(rawMetadata, currentFileDir, vaultBasePath);
+                    
                     const result = await pandoc(
                         {
                             file: inputFile, format: 'markdown',
                             pandoc: this.settings.pandoc || undefined, pdflatex: this.settings.pdflatex || undefined,
                             directory: path.dirname(inputFile),
+                            documentArgs: cliArgs,
                         },
                         { file: outputFile, format },
                         this.settings.extraArguments.split('\n')
@@ -180,6 +259,12 @@ export default class PandocPlugin extends Plugin {
             new Notice('Pandoc export failed: ' + errorMessage, 15000);
             console.error(e);
         }
+        
+        console.log('Export finished - binary state after:', {
+            pandoc: this.features['pandoc'],
+            everFoundPandoc: this.everFoundPandoc,
+            binaryMapInitialized: this.binaryMapInitialized
+        });
     }
 
     override onunload() {
@@ -192,5 +277,111 @@ export default class PandocPlugin extends Plugin {
 
     async saveSettings() {
         await this.saveData(this.settings);
+    }
+
+    // Helper method for extracting YAML metadata (duplicated from renderer.ts for markdown export)
+    private getYAMLMetadata(markdown: string) {
+        markdown = markdown.trim();
+        if (markdown.startsWith('---')) {
+            const trailing = markdown.substring(3);
+            const frontmatter = trailing.substring(0, trailing.indexOf('---')).trim();
+            return YAML.parse(frontmatter);
+        }
+        return {};
+    }
+
+    // Helper method for converting YAML to CLI args (duplicated from renderer.ts for markdown export)
+    private async convertYamlToPandocArgs(
+        metadata: { [key: string]: any }, 
+        currentFileDir: string, 
+        vaultBasePath: string
+    ): Promise<{ 
+        cleanedMetadata: { [key: string]: any }, 
+        cliArgs: string[] 
+    }> {
+        const cleanedMetadata: { [key: string]: any } = {};
+        const cliArgs: string[] = [];
+        
+        // Arguments that typically expect file paths (for smart resolution)
+        const FILE_PATH_ARGUMENTS = new Set([
+            'template', 'css', 'bibliography', 'csl', 'reference-doc', 'reference-odt', 
+            'reference-docx', 'epub-cover-image', 'epub-stylesheet', 'include-in-header',
+            'include-before-body', 'include-after-body', 'lua-filter', 'filter',
+            'metadata-file', 'abbreviations', 'syntax-definition'
+        ]);
+        
+        for (const [key, value] of Object.entries(metadata)) {
+            if (key.startsWith('pandoc-')) {
+                const argName = key.substring(7);
+                
+                if (value === true) {
+                    cliArgs.push(`--${argName}`);
+                } else if (value === false || value === null || value === undefined) {
+                    continue;
+                } else if (Array.isArray(value)) {
+                    for (const item of value) {
+                        if (item !== null && item !== undefined) {
+                            // Apply smart path resolution for file arguments
+                            const resolvedValue = FILE_PATH_ARGUMENTS.has(argName) 
+                                ? await this.resolveFilePath(String(item), currentFileDir, vaultBasePath)
+                                : item;
+                            cliArgs.push(`--${argName}=${resolvedValue}`);
+                        }
+                    }
+                } else {
+                    // Apply smart path resolution for file arguments
+                    const resolvedValue = FILE_PATH_ARGUMENTS.has(argName) 
+                        ? await this.resolveFilePath(String(value), currentFileDir, vaultBasePath)
+                        : value;
+                    cliArgs.push(`--${argName}=${resolvedValue}`);
+                }
+            } else {
+                cleanedMetadata[key] = value;
+            }
+        }
+        
+        return { cleanedMetadata, cliArgs };
+    }
+
+    // Helper method for smart path resolution (duplicated from renderer.ts for markdown export)
+    private async resolveFilePath(filePath: string, currentFileDir: string, vaultBasePath: string): Promise<string> {
+        // If it's already an absolute path, use as-is
+        if (path.isAbsolute(filePath)) {
+            return filePath;
+        }
+        
+        // Try relative to current file directory
+        const relativeToCurrent = path.resolve(currentFileDir, filePath);
+        if (await fileExists(relativeToCurrent)) {
+            return relativeToCurrent;
+        }
+        
+        // Try relative to vault root
+        const relativeToVault = path.resolve(vaultBasePath, filePath);
+        if (await fileExists(relativeToVault)) {
+            return relativeToVault;
+        }
+        
+        // Try custom template folder first if specified
+        if (this.settings.templateFolder) {
+            const customPath = path.isAbsolute(this.settings.templateFolder) 
+                ? path.resolve(this.settings.templateFolder, filePath)
+                : path.resolve(vaultBasePath, this.settings.templateFolder, filePath);
+            if (await fileExists(customPath)) {
+                return customPath;
+            }
+        }
+        
+        // Try common template directories in vault
+        const commonDirs = ['templates', 'Templates', '_templates', 'pandoc', 'assets'];
+        for (const dir of commonDirs) {
+            const templatePath = path.resolve(vaultBasePath, dir, filePath);
+            if (await fileExists(templatePath)) {
+                return templatePath;
+            }
+        }
+        
+        // If not found anywhere, return the original path (let Pandoc handle the error)
+        return filePath;
     }
 }

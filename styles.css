@@ -1,4 +1,5 @@
 
 .pandoc-plugin-error {
-    color: red;
+    color: var(--text-error);
+    font-weight: bold;
 }

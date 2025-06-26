@@ -15,7 +15,7 @@ import { Base64 } from 'js-base64';
 import { FileSystemAdapter, MarkdownRenderer, MarkdownView, Notice } from 'obsidian';
 
 import PandocPlugin from './main';
-import { PandocPluginSettings } from './global';
+import { PandocPluginSettings, fileExists } from './global';
 import mathJaxFontCSS from './styles/mathjax-css';
 import appCSS, { variables as appCSSVariables } from './styles/app-css';
 
@@ -24,7 +24,7 @@ import appCSS, { variables as appCSSVariables } from './styles/app-css';
 // inputFile must be an absolute file path
 export default async function render (plugin: PandocPlugin, view: MarkdownView,
     inputFile: string, outputFormat: string, parentFiles: string[] = []):
-    Promise<{ html: string, metadata: { [index: string]: string } }>
+    Promise<{ html: string, metadata: { [index: string]: string }, cliArgs: string[] }>
 {
     // Use Obsidian's markdown renderer to render to a hidden <div>
     const markdown = view.data;
@@ -40,13 +40,17 @@ export default async function render (plugin: PandocPlugin, view: MarkdownView,
     document.body.removeChild(wrapper);
 
     // If it's a top level note, make the HTML a standalone document - inject CSS, a <title>, etc.
-    const metadata = getYAMLMetadata(markdown);
-    metadata.title ??= fileBaseName(inputFile);
+    const rawMetadata = getYAMLMetadata(markdown);
+    const currentFileDir = path.dirname(inputFile);
+    const vaultBasePath = plugin.vaultBasePath();
+    const { cleanedMetadata, cliArgs } = await convertYamlToPandocArgs(rawMetadata, currentFileDir, vaultBasePath, plugin.settings.templateFolder);
+    cleanedMetadata.title ??= fileBaseName(inputFile);
+    
     if (parentFiles.length === 0) {
-        html = await standaloneHTML(plugin.settings, html, metadata.title, plugin.vaultBasePath());
+        html = await standaloneHTML(plugin.settings, html, cleanedMetadata.title, vaultBasePath);
     }
 
-    return { html, metadata };
+    return { html, metadata: cleanedMetadata, cliArgs };
 }
 
 // Takes any file path like '/home/oliver/zettelkasten/Obsidian.md' and
@@ -63,6 +67,108 @@ function getYAMLMetadata(markdown: string) {
         return YAML.parse(frontmatter);
     }
     return {};
+}
+
+// Smart path resolution: try multiple locations to find files
+async function resolveFilePath(filePath: string, currentFileDir: string, vaultBasePath: string, customTemplateFolder?: string | null): Promise<string> {
+    // If it's already an absolute path, use as-is
+    if (path.isAbsolute(filePath)) {
+        return filePath;
+    }
+    
+    // Try relative to current file directory
+    const relativeToCurrent = path.resolve(currentFileDir, filePath);
+    if (await fileExists(relativeToCurrent)) {
+        return relativeToCurrent;
+    }
+    
+    // Try relative to vault root
+    const relativeToVault = path.resolve(vaultBasePath, filePath);
+    if (await fileExists(relativeToVault)) {
+        return relativeToVault;
+    }
+    
+    // Try custom template folder first if specified
+    if (customTemplateFolder) {
+        const customPath = path.isAbsolute(customTemplateFolder) 
+            ? path.resolve(customTemplateFolder, filePath)
+            : path.resolve(vaultBasePath, customTemplateFolder, filePath);
+        if (await fileExists(customPath)) {
+            return customPath;
+        }
+    }
+    
+    // Try common template directories in vault
+    const commonDirs = ['templates', 'Templates', '_templates', 'pandoc', 'assets'];
+    for (const dir of commonDirs) {
+        const templatePath = path.resolve(vaultBasePath, dir, filePath);
+        if (await fileExists(templatePath)) {
+            return templatePath;
+        }
+    }
+    
+    // If not found anywhere, return the original path (let Pandoc handle the error)
+    return filePath;
+}
+
+// Arguments that typically expect file paths (for smart resolution)
+const FILE_PATH_ARGUMENTS = new Set([
+    'template', 'css', 'bibliography', 'csl', 'reference-doc', 'reference-odt', 
+    'reference-docx', 'epub-cover-image', 'epub-stylesheet', 'include-in-header',
+    'include-before-body', 'include-after-body', 'lua-filter', 'filter',
+    'metadata-file', 'abbreviations', 'syntax-definition'
+]);
+
+// Convert YAML frontmatter fields with 'pandoc-' prefix to CLI arguments
+async function convertYamlToPandocArgs(
+    metadata: { [key: string]: any }, 
+    currentFileDir: string, 
+    vaultBasePath: string,
+    customTemplateFolder?: string | null
+): Promise<{ 
+    cleanedMetadata: { [key: string]: any }, 
+    cliArgs: string[] 
+}> {
+    const cleanedMetadata: { [key: string]: any } = {};
+    const cliArgs: string[] = [];
+    
+    for (const [key, value] of Object.entries(metadata)) {
+        if (key.startsWith('pandoc-')) {
+            // Extract CLI argument name (remove 'pandoc-' prefix)
+            const argName = key.substring(7);
+            
+            if (value === true) {
+                // Boolean true: --flag
+                cliArgs.push(`--${argName}`);
+            } else if (value === false || value === null || value === undefined) {
+                // Boolean false/null/undefined: skip
+                continue;
+            } else if (Array.isArray(value)) {
+                // Array: multiple arguments with same flag
+                for (const item of value) {
+                    if (item !== null && item !== undefined) {
+                        // Apply smart path resolution for file arguments
+                        const resolvedValue = FILE_PATH_ARGUMENTS.has(argName) 
+                            ? await resolveFilePath(String(item), currentFileDir, vaultBasePath, customTemplateFolder)
+                            : item;
+                        cliArgs.push(`--${argName}=${resolvedValue}`);
+                    }
+                }
+            } else {
+                // String/number: --flag=value
+                // Apply smart path resolution for file arguments
+                const resolvedValue = FILE_PATH_ARGUMENTS.has(argName) 
+                    ? await resolveFilePath(String(value), currentFileDir, vaultBasePath, customTemplateFolder)
+                    : value;
+                cliArgs.push(`--${argName}=${resolvedValue}`);
+            }
+        } else {
+            // Regular metadata field: keep for metadata file
+            cleanedMetadata[key] = value;
+        }
+    }
+    
+    return { cleanedMetadata, cliArgs };
 }
 
 async function getCustomCSS(settings: PandocPluginSettings, vaultBasePath: string): Promise<string> {

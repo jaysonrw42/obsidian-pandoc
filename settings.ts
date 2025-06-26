@@ -108,6 +108,18 @@ export default class PandocPluginSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
+            .setName("Template folder")
+            .setDesc("Custom folder path for template files (e.g., 'templates', 'pandoc', '/absolute/path'). Used as a fallback when templates aren't found in standard locations.")
+            .addText(text => text
+                .setPlaceholder('templates')
+                .setValue(this.plugin.settings.templateFolder)
+                .onChange(async (value: string) => {
+                    if (!value.length) this.plugin.settings.templateFolder = null;
+                    else this.plugin.settings.templateFolder = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
             .setName("Show Pandoc command line interface commands")
             .setDesc("Doesn't apply to HTML exports. Using the CLI will have slightly different results due to how this plugin works.")
             .addToggle(toggle => toggle
