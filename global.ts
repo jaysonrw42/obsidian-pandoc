@@ -51,7 +51,7 @@ export const DEFAULT_SETTINGS: PandocPluginSettings = {
 export function replaceFileExtension(file: string, ext: string): string {
     // Source: https://stackoverflow.com/a/5953384/4642943
     let pos = file.lastIndexOf('.');
-    return file.substr(0, pos < 0 ? file.length : pos) + '.' + ext;
+    return file.substring(0, pos < 0 ? file.length : pos) + '.' + ext;
 }
 
 export async function fileExists(path: string): Promise<boolean> {
