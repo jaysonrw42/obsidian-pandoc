@@ -116,7 +116,13 @@ export default class PandocPlugin extends Plugin {
                         // Spawn Pandoc
                         const metadataFile = temp.path();
                         const metadataString = YAML.stringify(metadata);
-                        await fs.promises.writeFile(metadataFile, metadataString);
+                        try {
+                            await fs.promises.writeFile(metadataFile, metadataString);
+                        } catch (error) {
+                            new Notice(`Failed to create temporary metadata file: ${error.message}`);
+                            console.error('Metadata file write error:', error);
+                            return;
+                        }
                         const result = await pandoc(
                             {
                                 file: 'STDIN', contents: html, format: 'html', metadataFile,

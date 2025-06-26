@@ -66,30 +66,35 @@ function getYAMLMetadata(markdown: string) {
 }
 
 async function getCustomCSS(settings: PandocPluginSettings, vaultBasePath: string): Promise<string> {
-    if (!settings.customCSSFile) return;
+    if (!settings.customCSSFile) return '';
     let file = settings.customCSSFile;
     let buffer: Buffer = null;
+    
     // Try absolute path
     try {
-        let test = await fs.promises.readFile(file);
-        buffer = test;
-    } catch(e) { }
-    // Try relative path
-    try {
-        let test = await fs.promises.readFile(path.join(vaultBasePath, file));
-        buffer = test;
-    } catch(e) { }
-
-    if(!buffer) {
-        new Notice('Failed to load custom Pandoc CSS file: ' + settings.customCSSFile);
-        return '';
-    } else {
-        return buffer.toString();
+        buffer = await fs.promises.readFile(file);
+    } catch(e) {
+        // Try relative path
+        try {
+            buffer = await fs.promises.readFile(path.join(vaultBasePath, file));
+        } catch(e2) {
+            new Notice(`Failed to load custom Pandoc CSS file: ${settings.customCSSFile}. Please check the file path.`);
+            console.error('Custom CSS file read error:', e2);
+            return '';
+        }
     }
+
+    return buffer.toString();
 }
 
 async function getAppConfig(vaultBasePath: string): Promise<any> {
-    return JSON.parse((await fs.promises.readFile(path.join(vaultBasePath, '.obsidian', 'config'))).toString());
+    try {
+        const configData = await fs.promises.readFile(path.join(vaultBasePath, '.obsidian', 'config'));
+        return JSON.parse(configData.toString());
+    } catch (error) {
+        console.error('Failed to read Obsidian config:', error);
+        return {}; // Return empty config as fallback
+    }
 }
 
 async function currentThemeIsLight(vaultBasePath: string, config: any = null): Promise<boolean> {
