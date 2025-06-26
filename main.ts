@@ -24,6 +24,7 @@ export default class PandocPlugin extends Plugin {
     features: { [key: string]: string | undefined } = {};
     private binaryMapInitialized = false;
     private everFoundPandoc = false;
+    private cachedPandocPath: string | undefined;
 
     override async onload() {
         console.log('Loading Pandoc plugin');
@@ -106,6 +107,9 @@ export default class PandocPlugin extends Plugin {
             everFoundPandoc: this.everFoundPandoc,
             needsPandoc: needsPandoc(format),
             needsLaTeX: needsLaTeX(format),
+            pandocUndefined: this.features['pandoc'] === undefined,
+            pandocNull: this.features['pandoc'] === null,
+            pandocEmpty: this.features['pandoc'] === '',
             result: this.binaryMapInitialized ? 
                 (needsPandoc(format) ? (this.features['pandoc'] || this.everFoundPandoc) : true) : 
                 true
@@ -119,6 +123,11 @@ export default class PandocPlugin extends Plugin {
         
         // ALWAYS show commands if we've ever found Pandoc (even if features got cleared)
         if (needsPandoc(format) && this.everFoundPandoc) {
+            // Restore the cached path if features got cleared somehow
+            if (!this.features['pandoc'] && this.cachedPandocPath) {
+                console.log('Restoring cached Pandoc path:', this.cachedPandocPath);
+                this.features['pandoc'] = this.cachedPandocPath;
+            }
             console.log('Ever found Pandoc, showing command');
             return true;
         }
@@ -139,20 +148,36 @@ export default class PandocPlugin extends Plugin {
     }
 
     async createBinaryMap() {
-        this.features['pandoc'] = this.settings.pandoc || await lookpath('pandoc');
-        this.features['pdflatex'] = this.settings.pdflatex || await lookpath('pdflatex');
+        // Only initialize once
+        if (this.binaryMapInitialized) {
+            console.log('Binary map already initialized, skipping re-initialization');
+            return;
+        }
+        
+        const pandocPath = this.settings.pandoc || await lookpath('pandoc');
+        const pdflatexPath = this.settings.pdflatex || await lookpath('pdflatex');
+        
+        // Store the paths
+        this.features['pandoc'] = pandocPath;
+        this.features['pdflatex'] = pdflatexPath;
         this.binaryMapInitialized = true;
         
-        // Remember if we ever found Pandoc
-        if (this.features['pandoc']) {
+        // Remember if we ever found Pandoc - NEVER reset this
+        if (pandocPath) {
             this.everFoundPandoc = true;
+            this.cachedPandocPath = pandocPath;
+            console.log('Found Pandoc at:', pandocPath);
         }
         
         // Debug logging
         console.log('Pandoc binary map initialized:', {
             pandoc: this.features['pandoc'],
             pdflatex: this.features['pdflatex'],
-            everFoundPandoc: this.everFoundPandoc
+            everFoundPandoc: this.everFoundPandoc,
+            settings: {
+                pandoc: this.settings.pandoc,
+                pdflatex: this.settings.pdflatex
+            }
         });
     }
 
@@ -373,7 +398,7 @@ export default class PandocPlugin extends Plugin {
         }
         
         // Try common template directories in vault
-        const commonDirs = ['templates', 'Templates', '_templates', 'pandoc', 'assets'];
+        const commonDirs = ['templates', 'Templates', '_templates', 'pandoc', '.pandoc', 'assets'];
         for (const dir of commonDirs) {
             const templatePath = path.resolve(vaultBasePath, dir, filePath);
             if (await fileExists(templatePath)) {

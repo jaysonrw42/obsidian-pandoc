@@ -108,7 +108,7 @@ File path arguments automatically resolve from multiple locations:
 1. **Relative to current file** (existing behavior)
 2. **Relative to vault root** 
 3. **Custom template folder** (if configured in settings)
-4. **Common template directories**: `templates/`, `Templates/`, `_templates/`, `pandoc/`, `assets/`
+4. **Common template directories**: `templates/`, `Templates/`, `_templates/`, `pandoc/`, `.pandoc/`, `assets/`
 
 ```yaml
 # All of these will automatically find the template:
