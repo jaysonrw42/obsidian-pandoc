@@ -20,10 +20,10 @@ import render from './renderer';
 import PandocPluginSettingTab from './settings';
 import { PandocPluginSettings, DEFAULT_SETTINGS, replaceFileExtension } from './global';
 export default class PandocPlugin extends Plugin {
-    settings: PandocPluginSettings;
+    settings!: PandocPluginSettings;
     features: { [key: string]: string | undefined } = {};
 
-    async onload() {
+    override async onload() {
         console.log('Loading Pandoc plugin');
         await this.loadSettings();
 
@@ -38,6 +38,9 @@ export default class PandocPlugin extends Plugin {
 
     registerCommands() {
         for (let [prettyName, pandocFormat, extension, shortName] of outputFormats) {
+            // All outputFormats entries have 4 elements, so these are guaranteed to exist
+            const safeExtension = extension as string;
+            const safeShortName = shortName as string;
 
             const name = 'Export as ' + prettyName;
             this.addCommand({
@@ -47,7 +50,10 @@ export default class PandocPlugin extends Plugin {
                     if (!activeView) return false;
                     if (!this.currentFileCanBeExported(pandocFormat as OutputFormat)) return false;
                     if (!checking) {
-                        this.startPandocExport(this.getCurrentFile(), pandocFormat as OutputFormat, extension, shortName);
+                        const currentFile = this.getCurrentFile();
+                        if (currentFile) {
+                            this.startPandocExport(currentFile, pandocFormat as OutputFormat, safeExtension, safeShortName);
+                        }
                     }
                     return true;
                 }
@@ -105,6 +111,10 @@ export default class PandocPlugin extends Plugin {
 
             switch (this.settings.exportFrom) {
                 case 'html': {
+                    if (!view) {
+                        new Notice('No active markdown view found');
+                        return;
+                    }
                     const { html, metadata } = await render(this, view, inputFile, format);
 
                     if (format === 'html') {
@@ -119,14 +129,15 @@ export default class PandocPlugin extends Plugin {
                         try {
                             await fs.promises.writeFile(metadataFile, metadataString);
                         } catch (error) {
-                            new Notice(`Failed to create temporary metadata file: ${error.message}`);
+                            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                            new Notice(`Failed to create temporary metadata file: ${errorMessage}`);
                             console.error('Metadata file write error:', error);
                             return;
                         }
                         const result = await pandoc(
                             {
                                 file: 'STDIN', contents: html, format: 'html', metadataFile,
-                                pandoc: this.settings.pandoc, pdflatex: this.settings.pdflatex,
+                                pandoc: this.settings.pandoc || undefined, pdflatex: this.settings.pdflatex || undefined,
                                 directory: path.dirname(inputFile),
                             },
                             { file: outputFile, format },
@@ -141,7 +152,7 @@ export default class PandocPlugin extends Plugin {
                     const result = await pandoc(
                         {
                             file: inputFile, format: 'markdown',
-                            pandoc: this.settings.pandoc, pdflatex: this.settings.pdflatex,
+                            pandoc: this.settings.pandoc || undefined, pdflatex: this.settings.pdflatex || undefined,
                             directory: path.dirname(inputFile),
                         },
                         { file: outputFile, format },
@@ -165,12 +176,13 @@ export default class PandocPlugin extends Plugin {
             }
 
         } catch (e) {
-            new Notice('Pandoc export failed: ' + e.toString(), 15000);
+            const errorMessage = e instanceof Error ? e.message : String(e);
+            new Notice('Pandoc export failed: ' + errorMessage, 15000);
             console.error(e);
         }
     }
 
-    onunload() {
+    override onunload() {
         console.log('Unloading Pandoc plugin');
     }
 
