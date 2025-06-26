@@ -43,7 +43,8 @@ export default class PandocPlugin extends Plugin {
             this.addCommand({
                 id: 'pandoc-export-' + pandocFormat, name,
                 checkCallback: (checking: boolean) => {
-                    if (!this.app.workspace.activeLeaf) return false;
+                    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+                    if (!activeView) return false;
                     if (!this.currentFileCanBeExported(pandocFormat as OutputFormat)) return false;
                     if (!checking) {
                         this.startPandocExport(this.getCurrentFile(), pandocFormat as OutputFormat, extension, shortName);
