@@ -191,7 +191,6 @@ export const pandoc = async (input: PandocInput, output: PandocOutput, extraPara
                 });
             } else {
                 // Call resolve iff there is a nonempty result
-                (result.length ? resolve : reject)(value);
                 if (result.length) {
                     resolve(value);
                 } else {
