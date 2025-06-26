@@ -58,7 +58,7 @@ export async function fileExists(path: string): Promise<boolean> {
     try {
         const stats = await fs.promises.stat(path);
         return stats && stats.isFile();
-    } catch (e) {
+    } catch {
         return false;
     }
 }

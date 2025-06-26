@@ -18,7 +18,7 @@ import PandocPlugin from './main';
 import { PandocPluginSettings } from './global';
 import mathJaxFontCSS from './styles/mathjax-css';
 import appCSS, { variables as appCSSVariables } from './styles/app-css';
-import { outputFormats } from 'pandoc';
+
 
 // Note: parentFiles is for internal use (to prevent recursively embedded notes)
 // inputFile must be an absolute file path
@@ -73,7 +73,7 @@ async function getCustomCSS(settings: PandocPluginSettings, vaultBasePath: strin
     // Try absolute path
     try {
         buffer = await fs.promises.readFile(file);
-    } catch(e) {
+    } catch {
         // Try relative path
         try {
             buffer = await fs.promises.readFile(path.join(vaultBasePath, file));
@@ -101,7 +101,7 @@ async function currentThemeIsLight(vaultBasePath: string, config: any = null): P
     try {
         if (!config) config = await getAppConfig(vaultBasePath);
         return config.theme !== 'obsidian';
-    } catch (e) {
+    } catch {
         return true;
     }
 }
@@ -126,7 +126,7 @@ async function getThemeCSS(settings: PandocPluginSettings, vaultBasePath: string
         if (settings.injectAppCSS === 'light') light = true;
         if (settings.injectAppCSS === 'dark') light = false;
         return appCSS(light);
-    } catch (e) {
+    } catch {
         return '';
     }
 }
@@ -274,7 +274,7 @@ function convertSVGToPNG(svg: SVGSVGElement, scale: number = 1): Promise<HTMLIma
     const ctx = canvas.getContext('2d');
     var svgImg = new Image;
     svgImg.src = "data:image/svg+xml;base64," + Base64.encode(svg.outerHTML);
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         svgImg.onload = () => {
             ctx.drawImage(svgImg, 0, 0, canvas.width, canvas.height);
             const pngData = canvas.toDataURL('png');

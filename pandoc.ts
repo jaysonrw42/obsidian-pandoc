@@ -106,7 +106,7 @@ export const pandoc = async (input: PandocInput, output: PandocOutput, extraPara
     let result = '';
     let error = '';
 
-    const fileBaseName = (file: string): string => path.basename(file, path.extname(file));
+
 
     // Construct the Pandoc arguments list
     let args: string[] = [];
@@ -181,7 +181,7 @@ export const pandoc = async (input: PandocInput, output: PandocOutput, extraPara
                 command: 'pandoc ' + args.join(' ')
             };
             if (output.file !== 'STDOUT') {
-                fs.stat(output.file, (err: NodeJS.ErrnoException | null, stats: fs.Stats) => {
+                fs.stat(output.file, (_err: NodeJS.ErrnoException | null, stats: fs.Stats) => {
                     // Call resolve if the file exists, reject otherwise
                     if (stats && stats.isFile()) {
                         resolve(value);
@@ -204,7 +204,7 @@ export const pandoc = async (input: PandocInput, output: PandocOutput, extraPara
         start();
     } else {
         // Check if the input file exists, and then start
-        stat(input.file, (err: NodeJS.ErrnoException | null, stats: Stats) => {
+        stat(input.file, (_err: NodeJS.ErrnoException | null, stats: Stats) => {
             if (stats.isFile()) start();
             else reject(new Error('Input file does not exist'));
         });
