@@ -18,6 +18,7 @@ import PandocPlugin from './main';
 import { PandocPluginSettings, fileExists } from './global';
 import mathJaxFontCSS from './styles/mathjax-css';
 import appCSS, { variables as appCSSVariables } from './styles/app-css';
+import { validatePandocOption, isFlagOnlyOption, FILE_PATH_ARGUMENTS } from './pandoc-options';
 
 
 // Note: parentFiles is for internal use (to prevent recursively embedded notes)
@@ -111,13 +112,7 @@ async function resolveFilePath(filePath: string, currentFileDir: string, vaultBa
     return filePath;
 }
 
-// Arguments that typically expect file paths (for smart resolution)
-const FILE_PATH_ARGUMENTS = new Set([
-    'template', 'css', 'bibliography', 'csl', 'reference-doc', 'reference-odt', 
-    'reference-docx', 'epub-cover-image', 'epub-stylesheet', 'include-in-header',
-    'include-before-body', 'include-after-body', 'lua-filter', 'filter',
-    'metadata-file', 'abbreviations', 'syntax-definition'
-]);
+// FILE_PATH_ARGUMENTS is now imported from pandoc-options.ts
 
 // Convert YAML frontmatter fields with 'pandoc-' prefix to CLI arguments
 async function convertYamlToPandocArgs(
@@ -137,16 +132,37 @@ async function convertYamlToPandocArgs(
             // Extract CLI argument name (remove 'pandoc-' prefix)
             const argName = key.substring(7);
             
-            if (value === true) {
-                // Boolean true: --flag
-                cliArgs.push(`--${argName}`);
-            } else if (value === false || value === null || value === undefined) {
+            // Validate the option and value
+            const validation = validatePandocOption(argName, value);
+            if (!validation.isValid) {
+                new Notice(`Pandoc argument validation error: ${validation.error}`);
+                console.error(`Pandoc validation error for ${key}:`, validation.error);
+                continue; // Skip invalid options
+            }
+            
+            if (value === false || value === null || value === undefined) {
                 // Boolean false/null/undefined: skip
                 continue;
+            } else if (value === true) {
+                // Boolean true: check if it's a flag-only option
+                if (isFlagOnlyOption(argName, value)) {
+                    cliArgs.push(`--${argName}`);
+                } else {
+                    // For non-flag-only boolean options, use --flag=true
+                    cliArgs.push(`--${argName}=true`);
+                }
             } else if (Array.isArray(value)) {
                 // Array: multiple arguments with same flag
                 for (const item of value) {
                     if (item !== null && item !== undefined) {
+                        // Validate each array item
+                        const itemValidation = validatePandocOption(argName, item);
+                        if (!itemValidation.isValid) {
+                            new Notice(`Pandoc argument validation error for ${key}[]: ${itemValidation.error}`);
+                            console.error(`Pandoc validation error for ${key}[]:`, itemValidation.error);
+                            continue;
+                        }
+                        
                         // Apply smart path resolution for file arguments
                         const resolvedValue = FILE_PATH_ARGUMENTS.has(argName) 
                             ? await resolveFilePath(String(item), currentFileDir, vaultBasePath, customTemplateFolder)

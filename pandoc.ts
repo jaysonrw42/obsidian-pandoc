@@ -182,15 +182,15 @@ export const pandoc = async (input: PandocInput, output: PandocOutput, extraPara
     // The metadata title is needed for ePub and standalone HTML formats
     // We use a metadata file to avoid being vulnerable to command injection
     if (input.metadataFile) args.push('--metadata-file', input.metadataFile);
-    // Per-document CLI arguments from YAML frontmatter
-    if (input.documentArgs) {
-        args.push(...input.documentArgs);
-    }
-    // Extra parameters (global settings)
+    // Extra parameters (global settings) - add these first as defaults
     if (extraParams) {
         // Fix: properly parse arguments respecting quoted values instead of naive split
         const parsedArgs = extraParams.flatMap(x => parseArgumentString(x)).filter(x => x.length);
         args.push(...parsedArgs);
+    }
+    // Per-document CLI arguments from YAML frontmatter - add these last to override global settings
+    if (input.documentArgs) {
+        args.push(...input.documentArgs);
     }
 
     function start () {
